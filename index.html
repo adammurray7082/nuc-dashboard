@@ -82,18 +82,20 @@
     client.on('error', (e) => setStatus('Connection error: ' + e.message, 'err'));
     client.on('offline', () => setStatus('Offline - reconnecting...', 'connecting'));
 
-    client.on('message', (topic, message) => {
-      try {
-        const d = JSON.parse(message.toString());
-        updateCards(d);
-        log.push({ ts: new Date(), temps: [d.spectrum, d.echo, d.windows] });
-        if (log.length > MAX_PTS) log.shift();
-        updateChart();
-        setStatus('Last update: ' + new Date().toLocaleTimeString(), 'ok');
-      } catch(e) {
-        setStatus('Parse error', 'err');
-      }
-    });
+   client.on('message', (topic, message) => {
+  console.log('Message received:', topic, message.toString());
+  try {
+    const d = JSON.parse(message.toString());
+    updateCards(d);
+    log.push({ ts: new Date(), temps: [d.spectrum, d.echo, d.windows] });
+    if (log.length > MAX_PTS) log.shift();
+    updateChart();
+    setStatus('Last update: ' + new Date().toLocaleTimeString(), 'ok');
+  } catch(e) {
+    console.log('Parse error:', e);
+    setStatus('Parse error', 'err');
+  }
+});
 
     function colorClass(t) {
       if (t >= 55) return 'temp hot';
