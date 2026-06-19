@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NUC Temperature Monitor</title>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #0d1117; color: #e0e0e0; min-height: 100vh; padding: 32px 20px; }
+    h1 { font-size: 1.1em; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: #4fc3f7; text-align: center; margin-bottom: 28px; }
+    .cards { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; margin-bottom: 24px; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 22px 28px; min-width: 160px; text-align: center; }
+    .card .name { font-size: 0.78em; letter-spacing: 1px; text-transform: uppercase; color: #8b949e; margin-bottom: 10px; }
+    .card .temp { font-size: 2.4em; font-weight: 700; color: #4fc3f7; }
+    .card .temp.warm { color: #ffa726; }
+    .card .temp.hot  { color: #ef5350; }
+    .chart-box { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+    .chart-box h2 { font-size: 0.78em; letter-spacing: 1px; text-transform: uppercase; color: #8b949e; margin-bottom: 16px; font-weight: 400; }
+    .controls { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 24px; }
+    .btn { background: transparent; border: 1px solid #30363d; color: #8b949e; padding: 7px 16px; border-radius: 8px; cursor: pointer; font-size: 0.8em; }
+    .btn:hover { border-color: #4fc3f7; color: #4fc3f7; }
+    .status { text-align: center; font-size: 0.72em; color: #30363d; margin-top: 4px; }
+    .status.ok  { color: #1d9e75; }
+    .status.err { color: #ef5350; }
+    .status.connecting { color: #ffa726; }
+    .legend { display: flex; gap: 20px; justify-content: center; margin-bottom: 12px; font-size: 0.75em; color: #8b949e; }
+    .legend span { display: flex; align-items: center; gap: 6px; }
+    .legend .dot { width: 10px; height: 10px; border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <h1>NUC Temperature Monitor</h1>
+
+  <div class="cards">
+    <div class="card"><div class="name">Spectrum NUC</div><div class="temp" id="t0">--</div></div>
+    <div class="card"><div class="name">Echo NUC</div><div class="temp" id="t1">--</div></div>
+    <div class="card"><div class="name">Windows NUC</div><div class="temp" id="t2">--</div></div>
+  </div>
+
+  <div class="controls">
+    <button class="btn" onclick="exportCSV()">↓ Export CSV</button>
+    <button class="btn" onclick="clearLog()">✕ Clear log</button>
+  </div>
+
+  <div class="chart-box">
+    <h2>Temperature history</h2>
+    <div class="legend">
+      <span><span class="dot" style="background:#4fc3f7"></span>Spectrum</span>
+      <span><span class="dot" style="background:#ffa726"></span>Echo</span>
+      <span><span class="dot" style="background:#81c784"></span>Windows</span>
+    </div>
+    <div style="position:relative; width:100%; height:260px;">
+      <canvas id="histChart" role="img" aria-label="Line chart of NUC temperatures over time"></canvas>
+    </div>
+  </div>
+
+  <div class="status connecting" id="status">Connecting to HiveMQ...</div>
+
+  <script>
+    const MQTT_HOST = 'wss://6f2759bafb92440480b4e64a980f6ee5.s1.eu.hivemq.cloud:8884/mqtt';
+    const MQTT_USER = 'adammurray7082';
+    const MQTT_PASS = 'Smokeandmirrors1';  // fill in your password
+    const TOPIC     = 'nuc/temps';
+    const MAX_PTS   = 120;
+
+    const log = [];
+    let chart;
+
+    const client = mqtt.connect(MQTT_HOST, {
+      username: MQTT_USER,
+      password: MQTT_PASS,
+      reconnectPeriod: 5000
+    });
+
+    client.on('connect', () => {
+      setStatus('Connected', 'ok');
+      client.subscribe(TOPIC);
+    });
+
+    client.on('error', (e) => setStatus('Connection error: ' + e.message, 'err'));
+    client.on('offline', () => setStatus('Offline - reconnecting...', 'connecting'));
+
+    client.on('message', (topic, message) => {
+      try {
+        const d = JSON.parse(message.toString());
+        updateCards(d);
+        log.push({ ts: new Date(), temps: [d.spectrum, d.echo, d.windows] });
+        if (log.length > MAX_PTS) log.shift();
+        updateChart();
+        setStatus('Last update: ' + new Date().toLocaleTimeString(), 'ok');
+      } catch(e) {
+        setStatus('Parse error', 'err');
+      }
+    });
+
+    function colorClass(t) {
+      if (t >= 55) return 'temp hot';
+      if (t >= 45) return 'temp warm';
+      return 'temp';
+    }
+
+    function updateCards(d) {
+      [['t0', d.spectrum], ['t1', d.echo], ['t2', d.windows]].forEach(([id, val]) => {
+        const el = document.getElementById(id);
+        el.textContent = val.toFixed(1) + ' °C';
+        el.className = colorClass(val);
+      });
+    }
+
+    function updateChart() {
+      const labels = log.map(r => r.ts.toLocaleTimeString());
+      const d0 = log.map(r => r.temps[0]);
+      const d1 = log.map(r => r.temps[1]);
+      const d2 = log.map(r => r.temps[2]);
+      if (!chart) {
+        chart = new Chart(document.getElementById('histChart'), {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [
+              { label: 'Spectrum', data: d0, borderColor: '#4fc3f7', backgroundColor: 'rgba(79,195,247,0.08)', borderWidth: 2, pointRadius: 2, tension: 0.3 },
+              { label: 'Echo',     data: d1, borderColor: '#ffa726', backgroundColor: 'rgba(255,167,38,0.08)',  borderWidth: 2, pointRadius: 2, tension: 0.3, borderDash: [5,3] },
+              { label: 'Windows',  data: d2, borderColor: '#81c784', backgroundColor: 'rgba(129,199,132,0.08)', borderWidth: 2, pointRadius: 2, tension: 0.3, borderDash: [2,3] }
+            ]
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false, animation: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: '#8b949e', font: { size: 11 }, maxTicksLimit: 10 }, grid: { color: '#21262d' } },
+              y: { ticks: { color: '#8b949e', font: { size: 11 }, callback: v => v.toFixed(1) + '°' }, grid: { color: '#21262d' }, min: 20, suggestedMax: 70 }
+            }
+          }
+        });
+      } else {
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = d0;
+        chart.data.datasets[1].data = d1;
+        chart.data.datasets[2].data = d2;
+        chart.update('none');
+      }
+    }
+
+    function exportCSV() {
+      if (!log.length) return;
+      const rows = ['timestamp,spectrum_c,echo_c,windows_c', ...log.map(r => `${r.ts.toISOString()},${r.temps.join(',')}`)];
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([rows.join('\n')], { type: 'text/csv' }));
+      a.download = 'nuc_temps_' + new Date().toISOString().slice(0,10) + '.csv';
+      a.click();
+    }
+
+    function clearLog() {
+      log.length = 0;
+      if (chart) { chart.destroy(); chart = null; }
+      ['t0','t1','t2'].forEach(id => { document.getElementById(id).textContent = '--'; });
+    }
+
+    function setStatus(msg, cls) {
+      const el = document.getElementById('status');
+      el.textContent = msg;
+      el.className = 'status ' + cls;
+    }
+  </script>
+</body>
+</html>
